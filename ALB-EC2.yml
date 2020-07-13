@@ -1,16 +1,20 @@
 AWSTemplateFormatVersion: 2010-09-09
 Description: DemoApp uses EC2 for Probe and HA hosts.
-# This CFT is used to create 1 loadbalancer with 2 ec2 instnace and 2 security group.
+
 Parameters:
   Environment:
     Type: String
     Description: Specifies the application environment.
-    
+
      
 Mappings:
   # Define what EC2 type is to be used by Environment 
   InstanceType:
     Evaluation:
+      Probe: 't2.micro'
+      HA: 't2.micro'
+  
+    Production:
       Probe: 't2.micro'
       HA: 't2.micro'
    
@@ -30,7 +34,10 @@ Mappings:
   EnvironmentToVPC:
     Evaluation:
     #  VPC: vpc-1977ab72
-    VPC: vpc-3a3d2440  ## N.V region
+       VPC: vpc-3a3d2440  ## N.V region
+    Production:
+    #  VPC: vpc-1977ab72
+       VPC: vpc-1977ab72  ## N.V region
    
   
   EnvironmentToPublicSubnet:
@@ -39,12 +46,20 @@ Mappings:
     #  B: subnet-113b066b
       A: subnet-d931ac94
       B: subnet-cde62bab
+      
+    Production:
+      A: subnet-008c4b6b
+      B: subnet-113b066b
+      
        
         
  
   EnvironmentToAmazonAMI:
     Evaluation:
-      HVM64: ami-026dea5602e368e96 # AAMC RHEL 7.7 for AAMC specs
+      HVM64: ami-08f3d892de259504d # n.virginia
+      
+    Production:
+      HVM64: ami-0a54aef4ef3b5f881 #  ohi region
   
   AppToEnvironmentHosts:
     Evaluation:
@@ -57,6 +72,17 @@ Mappings:
       PVAULT1: ev-u-pvault-prob-01
       URL1: ev-u-url-prob-01
       URL2: ev-u-url-ha-01
+      
+    Production:
+      HYPERIC1: pd-u-hyperic-probe-01
+      HYPERIC2: pd-u-hyperic-probe-02
+      HYPERIC3: pd-u-hyperic-ha-03
+      HYPERIC4: pd-u-hyperic-ha-04
+      CLOUDOPS1: pd-u-cloudops-probe-01
+      ENACT1: pd-u-enact-prob-01
+      PVAULT1: pd-u-pvault-prob-01
+      URL1: pd-u-url-prob-01
+      URL2: pd-u-url-ha-01
 
   
 
@@ -172,7 +198,7 @@ Resources:
       
       InstanceInitiatedShutdownBehavior: stop
       InstanceType: !FindInMap [ InstanceType, !Ref 'Environment', HA]
-      KeyName: 'AWSDEMO'
+      #KeyName: 'AWSDEMO'
       Monitoring: 'false' #subnet-113b066b
       SubnetId: 
         Fn::FindInMap:
@@ -223,7 +249,7 @@ Resources:
       #IamInstanceProfile: AAMC-EC2FullAccess
       InstanceInitiatedShutdownBehavior: stop
       InstanceType: !FindInMap [ InstanceType, !Ref 'Environment', Probe]
-      KeyName: 'AWSDEMO'
+      #KeyName: 'AWSDEMO'
       Monitoring: 'false' #subnet-008c4b6b
       SubnetId: 
         Fn::FindInMap:
@@ -307,6 +333,15 @@ Resources:
   DemoAppHTTPHyperic1Listener:
     Type: AWS::ElasticLoadBalancingV2::Listener
     Properties:
+      DefaultActions:
+        - RedirectConfig:
+            Host: "#{host}"
+            Path: "/#{path}"
+            Port: 443
+            Protocol: "HTTPS"
+            Query: "#{query}"
+            StatusCode: HTTP_301
+          Type: redirect
       LoadBalancerArn:
         !Ref DemoAppHypericLoadBalancer1
       Port: 80
