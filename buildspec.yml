@@ -9,7 +9,6 @@ environment_variables:
       AWSCodePipeDemoProd.json
 
 #https://docs.aws.amazon.com/codebuild/latest/userguide/build-spec-ref.html#runtime-versions-buildspec-file
-#this is used to validate CFT and Json file and put into S3 buildartifact.
 phases:
   install:
     runtime-versions:
