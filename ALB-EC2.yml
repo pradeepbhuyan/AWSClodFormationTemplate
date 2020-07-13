@@ -1,0 +1,342 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: DemoApp uses EC2 for Probe and HA hosts.
+# This CFT is used to create 1 loadbalancer with 2 ec2 instnace and 2 security group.
+Parameters:
+  Environment:
+    Type: String
+    Description: Specifies the application environment.
+    
+     
+Mappings:
+  # Define what EC2 type is to be used by Environment 
+  InstanceType:
+    Evaluation:
+      Probe: 't2.micro'
+      HA: 't2.micro'
+   
+  # Defines all required DNS information needed for EC2 and VIP mappings to be created during deployment
+  DNSInfo:
+    Evaluation:
+      HostZoneName: 'ev.aamc.org'
+      AppZoneName: 'DemoApp.eval.aamc.org.'
+      HostZoneId:  Z09786302EH2M06DPNWQ9
+      PrivateZoneId: Z0968138FS8PEJQE5C5I
+      PublicZoneId:  Z35W2A8F8OO3AR
+    
+  # SSL cert for ALB VIPs 
+  EnvironmentToSSL:
+    Evaluation:
+      SSL: arn:aws:acm:us-east-1:283046813627:certificate/c1e0f4ed-b91c-415b-a8a8-2e6d8611b14b
+  EnvironmentToVPC:
+    Evaluation:
+    #  VPC: vpc-1977ab72
+    VPC: vpc-3a3d2440  ## N.V region
+   
+  
+  EnvironmentToPublicSubnet:
+    Evaluation:
+    #  A: subnet-008c4b6b
+    #  B: subnet-113b066b
+      A: subnet-d931ac94
+      B: subnet-cde62bab
+       
+        
+ 
+  EnvironmentToAmazonAMI:
+    Evaluation:
+      HVM64: ami-026dea5602e368e96 # AAMC RHEL 7.7 for AAMC specs
+  
+  AppToEnvironmentHosts:
+    Evaluation:
+      HYPERIC1: ev-u-hyperic-probe-01
+      HYPERIC2: ev-u-hyperic-probe-02
+      HYPERIC3: ev-u-hyperic-ha-03
+      HYPERIC4: ev-u-hyperic-ha-04
+      CLOUDOPS1: ev-u-cloudops-probe-01
+      ENACT1: ev-u-enact-prob-01
+      PVAULT1: ev-u-pvault-prob-01
+      URL1: ev-u-url-prob-01
+      URL2: ev-u-url-ha-01
+
+  
+
+Resources:
+  
+  #### SECURITY GROUPS ####
+  # HYperic Servers
+  EC2Hyperic:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: 'Allowing Internal SSH and application ports - 22,7080,7443,2144'
+      VpcId:
+        Fn::FindInMap:
+          - EnvironmentToVPC
+          - !Ref 'Environment'
+          - VPC
+      Tags:
+        - Key: Name
+          Value: !Join [ '-', [ DemoAppHYPERIC-EC2-SG, !Ref Environment] ]
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '7080'
+          ToPort: '7080'
+          CidrIp: 0.0.0.0/0
+
+        - IpProtocol: tcp
+          FromPort: '22'
+          ToPort: '22'
+          CidrIp: 0.0.0.0/0
+
+        - IpProtocol: tcp
+          FromPort: '22'
+          ToPort: '22'
+          CidrIp: 0.0.0.0/0
+         
+        - IpProtocol: tcp
+          FromPort: '7080'
+          ToPort: '7080'
+          CidrIp: 0.0.0.0/0
+
+        - IpProtocol: tcp
+          FromPort: '7443'
+          ToPort: '7443'
+          CidrIp: 0.0.0.0/0          
+          
+        - IpProtocol: tcp
+          FromPort: '2144'
+          ToPort: '2144'
+          CidrIp: 0.0.0.0/0  
+          
+        - IpProtocol: tcp
+          FromPort: '7080'
+          ToPort: '7080'
+          CidrIp: 0.0.0.0/0  
+          
+        - IpProtocol: icmp
+          FromPort: '-1'
+          ToPort: '-1'
+          CidrIp: 0.0.0.0/0
+
+        - IpProtocol: tcp   
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+
+ 
+  # ELB Security Group allowing Port 80 from anywhere
+  ALBhttps:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Port 80, 443, and ICMP
+      VpcId:
+        Fn::FindInMap:
+          - EnvironmentToVPC
+          - !Ref 'Environment'
+          - VPC
+      Tags:
+        - Key: Name
+          Value: !Join [ '-', [ DemoAppApp-ELB-SG, !Ref Environment] ]
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: icmp
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 0.0.0.0/0
+
+  DemoAppHypericHAInstance1:
+    Type: AWS::EC2::Instance
+    Properties:
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 20
+            VolumeType: gp2
+            Encrypted: true
+        - DeviceName: /dev/sdb
+          Ebs:
+            VolumeSize: 10
+            VolumeType: gp2
+            Encrypted: true
+      ImageId:
+        Fn::FindInMap:
+          - EnvironmentToAmazonAMI
+          - !Ref 'Environment'
+          - HVM64
+      
+      InstanceInitiatedShutdownBehavior: stop
+      InstanceType: !FindInMap [ InstanceType, !Ref 'Environment', HA]
+      KeyName: 'AWSDEMO'
+      Monitoring: 'false' #subnet-113b066b
+      SubnetId: 
+        Fn::FindInMap:
+          - EnvironmentToPublicSubnet
+          - !Ref 'Environment'
+          - A
+      SecurityGroupIds:
+        - !Ref EC2Hyperic
+      Tenancy: default
+      UserData:
+        Fn::Base64: !Sub |
+            #!/bin/bash
+            yum install httpd -y
+            echo "HA1 hyperic" > /var/www/html/index.html
+            service httpd start
+            chkconfig httpd on
+      
+      Tags:
+        -
+          Key: Name
+          Value:
+            Fn::FindInMap:
+              - AppToEnvironmentHosts
+              - !Ref 'Environment'
+              - HYPERIC3
+
+    ############HYperic Prob instance1
+  DemoAppHypericProbInstance1:
+    Type: AWS::EC2::Instance
+    Properties:
+      BlockDeviceMappings:
+        -
+          DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 20
+            VolumeType: gp2
+            Encrypted: true
+        - DeviceName: /dev/sdb
+          Ebs:
+            VolumeSize: 10
+            VolumeType: gp2
+            Encrypted: true
+      ImageId:
+        Fn::FindInMap:
+          - EnvironmentToAmazonAMI
+          - !Ref 'Environment'
+          - HVM64
+      #IamInstanceProfile: AAMC-EC2FullAccess
+      InstanceInitiatedShutdownBehavior: stop
+      InstanceType: !FindInMap [ InstanceType, !Ref 'Environment', Probe]
+      KeyName: 'AWSDEMO'
+      Monitoring: 'false' #subnet-008c4b6b
+      SubnetId: 
+        Fn::FindInMap:
+          - EnvironmentToPublicSubnet
+          - !Ref 'Environment'
+          - B
+      SecurityGroupIds:
+        - !Ref EC2Hyperic
+      Tenancy: default
+      UserData:
+        Fn::Base64: !Sub |
+            #!/bin/bash
+            yum install httpd -y
+            echo "Prob1 hyperic" > /var/www/html/index.html
+            service httpd start
+            chkconfig httpd on
+      Tags:
+        -
+          Key: Name
+          Value:
+            Fn::FindInMap:
+              - AppToEnvironmentHosts
+              - !Ref 'Environment'
+              - HYPERIC1
+
+     #### LOAD BALANCERS ####
+  # ALB: DemoApp.aamc.org
+  DemoAppHypericLoadBalancer1:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      LoadBalancerAttributes:
+        
+        - Key: deletion_protection.enabled
+          Value: false  # change this to true. This will add extra security net from deleting this ALB.
+      Name: !Join [ '-', [ DemoAppHypericALB1, !Ref Environment] ]
+      Scheme: internet-facing
+      Subnets: 
+        - !FindInMap [ EnvironmentToPublicSubnet, !Ref 'Environment', A]
+        - !FindInMap [ EnvironmentToPublicSubnet, !Ref 'Environment', B]
+    #    - subnet-008c4b6b
+    #    - subnet-113b066b
+    #   - subnet-d931ac94
+    #   - subnet-cde62bab
+
+      SecurityGroups:
+        - !Ref ALBhttps
+
+  ############# TARGET GROUPS ####
+  # TG: Hyperic TG1
+  DemoAppHypericTG1:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: 'Hyperic-TG1'
+      HealthCheckIntervalSeconds: 9
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 3
+      HealthyThresholdCount: 5
+      HealthCheckPath: '/'     
+      Matcher:
+        HttpCode: '200'
+      Port: 80
+      Protocol: HTTP
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: '20'
+      Targets:
+        - Id:
+            !Ref DemoAppHypericProbInstance1
+          Port: 80
+        - Id:
+            !Ref DemoAppHypericHAInstance1
+          Port: 80
+      UnhealthyThresholdCount: 3
+      VpcId:
+        Fn::FindInMap:
+          - EnvironmentToVPC
+          - !Ref 'Environment'
+          - VPC
+    
+  # ALB LISTENER: DemoApp.aamc.org
+  DemoAppHTTPHyperic1Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn:
+        !Ref DemoAppHypericLoadBalancer1
+      Port: 80
+      Protocol: HTTP
+
+  DemoAppHyperic1ListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref DemoAppHypericTG1
+      Conditions:
+        - Field: host-header
+          Values: 
+            - !GetAtt DemoAppHypericLoadBalancer1.DNSName
+      ListenerArn: !Ref DemoAppHTTPHyperic1Listener
+      Priority: 1
+
+ ###########output 
+
+Outputs:
+    ALBARN:
+        Value: !Ref DemoAppHypericLoadBalancer1
+    ALBDNSName:
+        Value: !GetAtt DemoAppHypericLoadBalancer1.DNSName
+    EC2HAInstance1:
+      Value: !Ref DemoAppHypericHAInstance1
+    EC2ProbInstance1:
+      Value: !Ref DemoAppHypericProbInstance1
+    SG:
+      Value: !Ref EC2Hyperic
+    
+    
